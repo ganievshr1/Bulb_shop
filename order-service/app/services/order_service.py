@@ -1,135 +1,186 @@
-import httpx
-from datetime import datetime
 from sqlalchemy.orm import Session
+from datetime import datetime
 from decimal import Decimal
-from .. import models, schemas
-from ..config import settings
+from typing import List, Optional, Tuple
+import random
+
+from app import models, schemas
+from app.clients.product_client import product_client
+from app.exceptions import OrderNotFoundError, InvalidOrderStatusError
 
 
-def generate_order_number():
-    """Generate unique order number: BLB-YYYYMMDD-XXXXXX"""
-    from datetime import datetime
-    import random
+class OrderService:
+    """Сервис для работы с заказами"""
 
-    date_str = datetime.now().strftime("%Y%m%d")
-    random_num = random.randint(1, 999999)
-    return f"BLB-{date_str}-{random_num:06d}"
+    @staticmethod
+    def generate_order_number() -> str:
+        """Сгенерировать уникальный номер заказа"""
+        date_str = datetime.now().strftime("%Y%m%d")
+        random_num = random.randint(1, 999999)
+        return f"BLB-{date_str}-{random_num:06d}"
 
+    @staticmethod
+    def get_order(db: Session, order_id: int) -> models.Order:
+        """Получить заказ по ID"""
+        order = db.query(models.Order).filter(models.Order.id == order_id).first()
+        if not order:
+            raise OrderNotFoundError(f"Order {order_id} not found")
+        return order
 
-async def validate_and_reserve_stock(items: list):
-    """Validate stock and reserve items via Product Service"""
-    async with httpx.AsyncClient() as client:
-        for item in items:
-            # Check stock
-            stock_response = await client.get(
-                f"{settings.PRODUCT_SERVICE_URL}/products/{item['product_id']}/stock"
+    @staticmethod
+    def get_order_by_number(db: Session, order_number: str) -> models.Order:
+        """Получить заказ по номеру"""
+        order = db.query(models.Order).filter(
+            models.Order.order_number == order_number
+        ).first()
+        if not order:
+            raise OrderNotFoundError(f"Order {order_number} not found")
+        return order
+
+    @staticmethod
+    def get_orders(
+            db: Session,
+            page: int = 1,
+            limit: int = 20,
+            status: Optional[str] = None,
+            user_id: Optional[int] = None
+    ) -> Tuple[List[models.Order], int]:
+        """Получить список заказов с пагинацией"""
+        query = db.query(models.Order)
+
+        if status:
+            query = query.filter(models.Order.status == status)
+        if user_id:
+            query = query.filter(models.Order.user_id == user_id)
+
+        query = query.order_by(models.Order.created_at.desc())
+
+        total = query.count()
+        offset = (page - 1) * limit
+        orders = query.offset(offset).limit(limit).all()
+
+        return orders, total
+
+    @staticmethod
+    async def create_order(db: Session, order_data: schemas.OrderCreate) -> dict:
+        """Создать новый заказ"""
+        # 1. Валидация товаров через Product Service
+        items_data = await product_client.validate_products(
+            [item.model_dump() for item in order_data.items]
+        )
+
+        # 2. Расчет общей суммы
+        total_amount = sum(item["total_price"] for item in items_data)
+
+        # 3. Создание заказа
+        order_number = OrderService.generate_order_number()
+
+        db_order = models.Order(
+            order_number=order_number,
+            customer_name=order_data.customer_name,
+            customer_phone=order_data.customer_phone,
+            customer_email=order_data.customer_email,
+            delivery_address=order_data.delivery_address,
+            payment_method=order_data.payment_method,
+            comment=order_data.comment,
+            total_amount=total_amount,
+            status="new",
+            payment_status="pending"
+        )
+        db.add(db_order)
+        db.flush()
+
+        # 4. Добавление позиций заказа
+        for item_data in items_data:
+            db_item = models.OrderItem(
+                order_id=db_order.id,
+                **item_data
             )
-            if stock_response.status_code != 200:
-                raise ValueError(f"Product {item['product_id']} not found")
+            db.add(db_item)
 
-            stock_data = stock_response.json()
-            if stock_data["data"]["stock"] < item["quantity"]:
-                product_name = stock_data["data"]["product_name"]
-                raise ValueError(f"Insufficient stock for product: {product_name}")
-
-
-async def get_product_info(product_id: int):
-    """Get product info from Product Service"""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{settings.PRODUCT_SERVICE_URL}/products/{product_id}"
-        )
-        if response.status_code != 200:
-            raise ValueError(f"Product {product_id} not found")
-        return response.json()["data"]
-
-
-async def update_product_stock(product_id: int, new_stock: int):
-    """Update product stock via Product Service"""
-    async with httpx.AsyncClient() as client:
-        await client.put(
-            f"{settings.PRODUCT_SERVICE_URL}/products/{product_id}/stock",
-            json={"stock": new_stock}
-        )
-
-
-def add_status_history(db: Session, order_id: int, status: str, changed_by: str, comment: str = None):
-    """Add entry to order status history"""
-    history = models.OrderStatusHistory(
-        order_id=order_id,
-        status=status,
-        changed_by=changed_by,
-        comment=comment
-    )
-    db.add(history)
-    db.commit()
-
-
-async def create_order(db: Session, order_data: schemas.OrderCreate):
-    """Create new order"""
-    # Validate stock
-    await validate_and_reserve_stock([item.model_dump() for item in order_data.items])
-
-    # Get product info and calculate total
-    total_amount = Decimal("0.00")
-    order_items = []
-
-    for item in order_data.items:
-        product_info = await get_product_info(item.product_id)
-
-        unit_price = Decimal(str(product_info["price"]))
-        total_price = unit_price * item.quantity
-        total_amount += total_price
-
-        order_items.append({
-            "product_id": item.product_id,
-            "product_name": product_info["name"],
-            "quantity": item.quantity,
-            "unit_price": unit_price,
-            "total_price": total_price
-        })
-
-    # Create order
-    order_number = generate_order_number()
-
-    db_order = models.Order(
-        order_number=order_number,
-        customer_name=order_data.customer_name,
-        customer_phone=order_data.customer_phone,
-        customer_email=order_data.customer_email,
-        delivery_address=order_data.delivery_address,
-        payment_method=order_data.payment_method,
-        comment=order_data.comment,
-        total_amount=total_amount,
-        status="new"
-    )
-    db.add(db_order)
-    db.flush()
-
-    # Add order items
-    for item_data in order_items:
-        db_item = models.OrderItem(
+        # 5. Добавление записи в историю
+        history = models.OrderStatusHistory(
             order_id=db_order.id,
-            **item_data
+            status="new",
+            changed_by="system",
+            comment="Заказ создан"
         )
-        db.add(db_item)
+        db.add(history)
 
-    # Add status history
-    add_status_history(db, db_order.id, "new", "system", "Order created")
+        db.commit()
+        db.refresh(db_order)
 
-    db.commit()
-    db.refresh(db_order)
+        # 6. Обновление остатков в Product Service
+        for item in order_data.items:
+            product = await product_client.get_product(item.product_id)
+            new_stock = product["stock"] - item.quantity
+            await product_client.update_product_stock(item.product_id, new_stock)
 
-    # Update stock in Product Service (decrease)
-    for item in order_data.items:
-        product_info = await get_product_info(item.product_id)
-        new_stock = product_info["stock"] - item.quantity
-        await update_product_stock(item.product_id, new_stock)
+        return {
+            "id": db_order.id,
+            "order_number": db_order.order_number,
+            "status": db_order.status,
+            "total_amount": float(total_amount),
+            "created_at": db_order.created_at.isoformat() if db_order.created_at else None
+        }
 
-    return {
-        "id": db_order.id,
-        "order_number": db_order.order_number,
-        "status": db_order.status,
-        "total_amount": float(total_amount),
-        "created_at": db_order.created_at.isoformat()
-    }
+    @staticmethod
+    def update_order_status(
+            db: Session,
+            order_id: int,
+            new_status: str,
+            changed_by: str = "system",
+            comment: str = None
+    ) -> models.Order:
+        """Обновить статус заказа"""
+        order = OrderService.get_order(db, order_id)
+
+        # Валидация перехода статуса
+        allowed_transitions = {
+            "new": ["confirmed", "cancelled"],
+            "confirmed": ["paid", "cancelled"],
+            "paid": ["shipped", "cancelled"],
+            "shipped": ["delivered", "cancelled"],
+            "delivered": [],
+            "cancelled": []
+        }
+
+        if new_status not in allowed_transitions.get(order.status, []):
+            raise InvalidOrderStatusError(
+                f"Cannot change order status from {order.status} to {new_status}"
+            )
+
+        old_status = order.status
+        order.status = new_status
+
+        # Установка дат
+        if new_status == "delivered":
+            order.delivered_at = datetime.now()
+        elif new_status == "cancelled":
+            order.cancelled_at = datetime.now()
+
+        # Добавление записи в историю
+        history = models.OrderStatusHistory(
+            order_id=order.id,
+            status=new_status,
+            changed_by=changed_by,
+            comment=comment or f"Статус изменен с {old_status} на {new_status}"
+        )
+        db.add(history)
+
+        db.commit()
+        db.refresh(order)
+
+        return order
+
+    @staticmethod
+    def get_order_items(db: Session, order_id: int) -> List[models.OrderItem]:
+        """Получить позиции заказа"""
+        order = OrderService.get_order(db, order_id)
+        return order.items
+
+    @staticmethod
+    def get_order_status_history(db: Session, order_id: int) -> List[models.OrderStatusHistory]:
+        """Получить историю статусов заказа"""
+        order = OrderService.get_order(db, order_id)
+        return order.status_history

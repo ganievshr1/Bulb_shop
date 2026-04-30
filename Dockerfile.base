@@ -1,0 +1,32 @@
+FROM python:3.11-slim as builder
+
+WORKDIR /app
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копирование и установка зависимостей (кэшируется)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Финальный образ
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Копирование установленных пакетов из builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Установка минимальных системных зависимостей
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+COPY ./app /app/app
