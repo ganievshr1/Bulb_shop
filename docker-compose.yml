@@ -37,6 +37,25 @@ services:
     networks:
       - bulbshop-network
 
+  # PostgreSQL for Admin Service
+  admin-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin_user
+      POSTGRES_PASSWORD: admin_pass
+      POSTGRES_DB: admin_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - admin_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_user -d admin_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bulbshop-network
+
   # Product Service
   product-service:
     build: ./product-service
@@ -70,6 +89,33 @@ services:
     networks:
       - bulbshop-network
 
+  # Admin Service
+  admin-service:
+    build: ./admin-service
+    environment:
+      DATABASE_URL: postgresql://admin_user:admin_pass@admin-db:5432/admin_db
+      PRODUCT_SERVICE_URL: http://product-service:8081/api/v1
+      ORDER_SERVICE_URL: http://order-service:8082/api/v1
+      JWT_SECRET_KEY: fixed-development-secret-key-do-not-use-in-production-2026
+      SERVICE_PORT: 8083
+      LOG_LEVEL: INFO
+      ADMIN_LOGIN: admin
+      ADMIN_PASSWORD: admin123
+      ADMIN_EMAIL: admin@bulbshop.com
+      ADMIN_FULL_NAME: Администратор
+    ports:
+      - "8083:8083"
+    depends_on:
+      admin-db:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+      order-service:
+        condition: service_started
+    networks:
+      - bulbshop-network
+    restart: unless-stopped
+
   # API Gateway
   api-gateway:
     build: ./api-gateway
@@ -78,6 +124,7 @@ services:
     depends_on:
       - product-service
       - order-service
+      - admin-service
     networks:
       - bulbshop-network
     restart: unless-stopped
@@ -89,3 +136,4 @@ networks:
 volumes:
   product_db_data:
   order_db_data:
+  admin_db_data:
