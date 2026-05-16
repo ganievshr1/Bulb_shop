@@ -18,11 +18,11 @@ class ProductService:
     async def _make_request(method: str, endpoint: str, data: Optional[Dict] = None) -> Dict[str, Any]:
         """Make HTTP request to Product Service"""
         url = f"{settings.PRODUCT_SERVICE_URL}{endpoint}"
-        
+
         # Convert Decimal to float in data
         if data:
             data = json.loads(json.dumps(data, cls=DecimalEncoder))
-        
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             if method == "GET":
                 response = await client.get(url)
@@ -34,10 +34,20 @@ class ProductService:
                 response = await client.delete(url)
             else:
                 raise ValueError(f"Unsupported method: {method}")
-            
+
             response.raise_for_status()
-            return response.json()
-    
+
+            # 🔥 ИСПРАВЛЕНИЕ: Проверяем, есть ли контент для парсинга JSON
+            # При DELETE запросе product-service возвращает 204 No Content (пустой ответ)
+            if response.status_code == 204 or not response.content:
+                return {"success": True}
+
+            try:
+                return response.json()
+            except json.JSONDecodeError:
+                # Если не удалось распарсить JSON, но статус успешный
+                return {"success": True}
+
     @staticmethod
     async def get_all_products(
             page: int = 1,
@@ -60,34 +70,34 @@ class ProductService:
             params["socket_type"] = socket_type
         if is_active is not None:
             params["is_active"] = is_active
-        
+
         url = f"{settings.PRODUCT_SERVICE_URL}/products"
-        
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, params=params)
             response.raise_for_status()
             return response.json()
-    
+
     @staticmethod
     async def get_product(product_id: int) -> Dict[str, Any]:
         """Get product by ID"""
         return await ProductService._make_request("GET", f"/products/{product_id}")
-    
+
     @staticmethod
     async def create_product(product_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create new product"""
         return await ProductService._make_request("POST", "/products", product_data)
-    
+
     @staticmethod
     async def update_product(product_id: int, product_data: Dict[str, Any]) -> Dict[str, Any]:
         """Update product"""
         return await ProductService._make_request("PUT", f"/products/{product_id}", product_data)
-    
+
     @staticmethod
-    async def delete_product(product_id: int) -> None:
+    async def delete_product(product_id: int) -> Dict[str, Any]:
         """Delete product (soft delete)"""
-        await ProductService._make_request("DELETE", f"/products/{product_id}")
-    
+        return await ProductService._make_request("DELETE", f"/products/{product_id}")
+
     @staticmethod
     async def update_product_stock(product_id: int, stock: int) -> Dict[str, Any]:
         """Update product stock"""

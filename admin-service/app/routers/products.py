@@ -36,9 +36,9 @@ def validate_product_name(name: Optional[str]) -> Optional[str]:
 @router.get("/products")
 async def get_all_products(
         request: Request,
-        page: int = Query(1, ge=1, le=1000),  # ✅ Ограничение сверху
+        page: int = Query(1, ge=1, le=1000),
         limit: int = Query(20, ge=1, le=100),
-        category_id: Optional[int] = Query(None, ge=1),  # ✅ Только положительные
+        category_id: Optional[int] = Query(None, ge=1),
         min_price: Optional[Decimal] = Query(None, ge=0),
         max_price: Optional[Decimal] = Query(None, ge=0),
         socket_type: Optional[str] = None,
@@ -48,7 +48,6 @@ async def get_all_products(
 ):
     """Get all products (including inactive) with validation"""
 
-    # ✅ Валидация входных параметров
     if min_price and max_price and min_price > max_price:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -67,7 +66,6 @@ async def get_all_products(
         is_active=is_active
     )
 
-    # ✅ Логирование без чувствительных данных
     await AuditService.log_action(
         db=db,
         admin_id=current_admin.id,
@@ -99,7 +97,6 @@ async def get_product(
 ):
     """Get product by ID"""
 
-    # ✅ Валидация ID
     if product_id < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -136,7 +133,6 @@ async def create_product(
 ):
     """Create new product with validation"""
 
-    # ✅ Дополнительная валидация перед отправкой
     validate_product_name(product.name)
 
     if product.socket_type:
@@ -148,7 +144,6 @@ async def create_product(
             detail="Price must be greater than 0"
         )
 
-    # ✅ Очистка данных от None значений
     product_data = product.model_dump(exclude_none=True)
 
     result = await ProductService.create_product(product_data)
@@ -189,14 +184,12 @@ async def update_product(
 ):
     """Update product with validation"""
 
-    # ✅ Валидация ID
     if product_id < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid product ID"
         )
 
-    # ✅ Проверка существования продукта
     old_product = await ProductService.get_product(product_id)
     if not old_product:
         raise HTTPException(
@@ -204,7 +197,6 @@ async def update_product(
             detail=f"Product {product_id} not found"
         )
 
-    # ✅ Валидация обновляемых полей
     update_data = product_update.model_dump(exclude_unset=True)
 
     if 'name' in update_data:
@@ -221,7 +213,6 @@ async def update_product(
 
     result = await ProductService.update_product(product_id, update_data)
 
-    # ✅ Логирование только изменённых полей
     changes = {}
     for key in update_data:
         old_val = old_product.get(key)
@@ -244,7 +235,7 @@ async def update_product(
     return result
 
 
-@router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/products/{product_id}")
 async def delete_product(
         product_id: int,
         request: Request,
@@ -253,14 +244,12 @@ async def delete_product(
 ):
     """Delete product (soft delete)"""
 
-    # ✅ Валидация ID
     if product_id < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid product ID"
         )
 
-    # ✅ Проверка существования продукта
     old_product = await ProductService.get_product(product_id)
     if not old_product:
         raise HTTPException(
@@ -281,7 +270,12 @@ async def delete_product(
         user_agent=get_user_agent(request)
     )
 
-    return None
+    # ✅ ИСПРАВЛЕНО: возвращаем JSON вместо None (было status_code=204)
+    return {
+        "success": True,
+        "message": f"Product {product_id} '{old_product.get('name')}' deleted successfully",
+        "deleted_id": product_id
+    }
 
 
 @router.put("/products/{product_id}/stock")
@@ -294,27 +288,24 @@ async def update_product_stock(
 ):
     """Update product stock with validation"""
 
-    # ✅ Валидация ID
     if product_id < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid product ID"
         )
 
-    # ✅ Дополнительная валидация количества
     if stock_update.stock < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Stock cannot be negative"
         )
 
-    if stock_update.stock > 1000000:  # ✅ Разумный лимит
+    if stock_update.stock > 1000000:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Stock value too high (max: 1,000,000)"
         )
 
-    # ✅ Проверка существования продукта
     old_product = await ProductService.get_product(product_id)
     if not old_product:
         raise HTTPException(
