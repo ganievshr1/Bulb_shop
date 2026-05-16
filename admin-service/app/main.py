@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .database import engine, SessionLocal
 from .config import settings
-from .routers import auth_router, products_router, orders_router, logs_router
+from .routers import auth_router, products_router, orders_router, logs_router, profile_router
 from .auth import get_password_hash
 
 
@@ -71,6 +71,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(products_router, prefix="/api/v1")
 app.include_router(orders_router, prefix="/api/v1")
 app.include_router(logs_router, prefix="/api/v1")
+app.include_router(profile_router, prefix="/api/v1")
 
 
 @app.get("/health")

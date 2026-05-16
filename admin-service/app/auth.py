@@ -4,25 +4,32 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from passlib.context import CryptContext
 from . import models
 from .config import settings
 from .database import get_db
 
 security = HTTPBearer()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return plain_password == "admin123" or plain_password == hashed_password
+    if plain_password == "admin123" and hashed_password == "admin123":
+        return True
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except (ValueError, TypeError):
+        return plain_password == hashed_password
 
 
 def get_password_hash(password: str) -> str:
-    return password
+    if password.startswith("$2b$") or password.startswith("$2a$"):
+        return password
+    return pwd_context.hash(password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create JWT access token"""
     to_encode = data.copy()
-    # Convert sub to string if it's an integer
     if 'sub' in to_encode and isinstance(to_encode['sub'], int):
         to_encode['sub'] = str(to_encode['sub'])
     if expires_delta:
@@ -35,7 +42,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 
 def decode_token(token: str) -> Optional[dict]:
-    """Decode JWT token"""
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         return payload
@@ -83,7 +89,6 @@ async def get_current_admin(
         print("No sub in token")
         raise credentials_exception
     
-    # Convert string sub back to int
     try:
         admin_id = int(admin_id)
     except (ValueError, TypeError):
