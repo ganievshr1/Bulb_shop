@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+import secrets
 
 
 class Settings(BaseSettings):
@@ -13,18 +14,18 @@ class Settings(BaseSettings):
     SERVICE_PORT: int = 8083
     LOG_LEVEL: str = "INFO"
 
-    # JWT - фиксированный ключ для разработки
-    JWT_SECRET_KEY: str = "fixed-development-secret-key-do-not-use-in-production-2026"
+    # ✅ JWT — секрет через .env или генерируется автоматически
+    JWT_SECRET_KEY: str = secrets.token_urlsafe(32)  # Автогенерация если нет .env
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # ✅ Уменьшено с 480 до 30 минут!
 
     # Other services
     PRODUCT_SERVICE_URL: str = "http://product-service:8081/api/v1"
     ORDER_SERVICE_URL: str = "http://order-service:8082/api/v1"
 
-    # Admin credentials
+    # ✅ Admin credentials — ТОЛЬКО для инициализации, не для проверки
     ADMIN_LOGIN: str = "admin"
-    ADMIN_PASSWORD: str = "admin123"
+    ADMIN_PASSWORD: str = ""  # Пустой — будет ошибка при старте
     ADMIN_EMAIL: str = "admin@bulbshop.com"
     ADMIN_FULL_NAME: str = "Администратор"
 
@@ -35,7 +36,17 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+
+    # ✅ Проверка при запуске
+    if not settings.ADMIN_PASSWORD:
+        raise ValueError(
+            "ADMIN_PASSWORD не задан! Создайте .env файл:\n"
+            "ADMIN_PASSWORD=your_secure_password_here\n"
+            "JWT_SECRET_KEY=your_random_secret_key"
+        )
+
+    return settings
 
 
 settings = get_settings()
